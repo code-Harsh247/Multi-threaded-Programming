@@ -33,11 +33,14 @@ int rand_range(int lo, int hi){
     return lo + rand() % (hi - lo + 1);
 }
 
-// Wait
+// Wait. The waiter consumes a unit only once one is actually available, so a
+// single V() releases exactly one P(). Re-checking in a while loop keeps this
+// correct under spurious wakeups and without assuming the condition queue is
+// FIFO -- a thread woken out of turn simply finds value == 0 and waits again.
 void P(semaphore *s){
     pthread_mutex_lock(&(s->mtx));
+    while(s->value <= 0) pthread_cond_wait(&(s->cv), &(s->mtx));
     s->value--;
-    while(s->value < 0) pthread_cond_wait(&(s->cv), &(s->mtx));
     pthread_mutex_unlock(&(s->mtx));
 }
 
@@ -45,7 +48,7 @@ void P(semaphore *s){
 void V(semaphore *s){
     pthread_mutex_lock(&(s->mtx));
     s->value++;
-    if(s->value <= 0) pthread_cond_signal(&(s->cv));
+    pthread_cond_signal(&(s->cv));
     pthread_mutex_unlock(&(s->mtx));
 }
 
@@ -104,19 +107,24 @@ void *Visitor(void *targ){
     P(&rider);
     printf("Visitor\t%d\tReady to ride a boat (ride time = %3ld)\n",vis_id+1,rtime);
 
+    // Some boat must be available (one just signalled us), but it may not have
+    // published BA[] yet if it was preempted. Retry, releasing bmtx and
+    // sleeping briefly between scans so the boat can make progress.
     int boat_id = -1;
     pthread_barrier_t* bar = NULL;
-    for(int i = 0; i < m; i++){
+    while(boat_id < 0){
         pthread_mutex_lock(&bmtx);
-        if(BA[i] && BC[i] == -1){
-            boat_id = i;
-            BC[boat_id] = vis_id;
-            BT[boat_id] = rtime;
-            bar = &BB[boat_id];
-            pthread_mutex_unlock(&bmtx);
-            break;
+        for(int i = 0; i < m; i++){
+            if(BA[i] && BC[i] == -1){
+                boat_id = i;
+                BC[boat_id] = vis_id;
+                BT[boat_id] = rtime;
+                bar = &BB[boat_id];
+                break;
+            }
         }
         pthread_mutex_unlock(&bmtx);
+        if(boat_id < 0) usleep(2000);
     }
 
     printf("Visitor\t%d\tFinds boat %2d\n", vis_id+1, boat_id+1);
@@ -167,10 +175,13 @@ int main(int argc, char* argv[]){
 
     pthread_barrier_wait(&EOS);
 
+    // The simulation is over: every visitor has ridden and left. Any boat
+    // threads still alive are parked waiting for a rider that will never come.
+    // They are not joined here on purpose -- an idle boat blocks in
+    // pthread_barrier_wait(), which is not a cancellation point, so joining
+    // them would hang forever.
     for(int i=0; i<m; i++) pthread_cancel(boat_thr[i]);
     for(int i=0; i<n; i++) pthread_cancel(vis_thr[i]);
-    for(int i=0; i<m; i++) pthread_join(boat_thr[i], NULL);
-    for(int i=0; i<n; i++) pthread_join(vis_thr[i], NULL);
     for(int i=0; i<m; i++) pthread_barrier_destroy(&BB[i]);
     pthread_mutex_destroy(&bmtx);
     pthread_mutex_destroy(&(boat.mtx));
