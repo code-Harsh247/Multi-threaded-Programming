@@ -1,0 +1,9 @@
+# The simulator's site block. setup.sh copies this to ~/proxy/sites/,
+# replacing SITE_ADDRESS with the real address.
+SITE_ADDRESS {
+	reverse_proxy boating:3000 {
+		# Pass each simulation event to the browser the moment it arrives.
+		# Without this, Caddy may buffer the NDJSON stream.
+		flush_interval -1
+	}
+}

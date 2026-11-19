@@ -130,6 +130,8 @@ Configuration (environment variables):
 
 `docker build -t boating-web . && docker run -p 3000:3000 boating-web`
 builds the engine on Linux and runs the server as a non-root user.
+To host it on a VM behind HTTPS (alongside other projects), see
+[`deploy/README.md`](deploy/README.md).
 
 ## Design notes
 

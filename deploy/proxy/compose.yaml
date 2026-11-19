@@ -1,0 +1,28 @@
+# The VM's shared reverse proxy. It owns ports 80/443, gets HTTPS
+# certificates automatically, and routes each site to a project on the
+# shared "web" Docker network. setup.sh copies this folder to ~/proxy once;
+# after that ~/proxy belongs to the VM, not to any one project.
+name: proxy
+services:
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - ./sites:/etc/caddy/sites:ro
+      - caddy_data:/data          # certificates live here; keep this volume
+      - caddy_config:/config
+    networks:
+      - web
+
+networks:
+  web:
+    external: true
+
+volumes:
+  caddy_data:
+  caddy_config:

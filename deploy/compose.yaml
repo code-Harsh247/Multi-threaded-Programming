@@ -1,6 +1,7 @@
-# Production stack: the simulator behind Caddy (automatic HTTPS).
+# The boating simulator's own stack. It has no public ports: the shared
+# proxy (~/proxy) reaches it as "boating:3000" on the "web" network.
 # Run from this folder:  docker compose up -d --build
-# SITE_ADDRESS comes from deploy/.env, e.g. SITE_ADDRESS=129-146-10-20.sslip.io
+name: boating                     # explicit, so another project's "deploy" folder can't collide
 services:
   app:
     build: ..
@@ -15,23 +16,11 @@ services:
       - "3000"
     mem_limit: 512m
     pids_limit: 2048              # 4 runs x up to 221 threads, with headroom
+    networks:
+      web:
+        aliases:
+          - boating               # the name the proxy uses; unique per project
 
-  caddy:
-    image: caddy:2
-    restart: unless-stopped
-    depends_on:
-      - app
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      SITE_ADDRESS: ${SITE_ADDRESS:?set SITE_ADDRESS in deploy/.env}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data          # certificates live here; keep this volume
-      - caddy_config:/config
-
-volumes:
-  caddy_data:
-  caddy_config:
+networks:
+  web:
+    external: true

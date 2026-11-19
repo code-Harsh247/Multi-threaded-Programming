@@ -1,0 +1,4 @@
+# Each project adds one file to ./sites (mounted at /etc/caddy/sites).
+# After adding or editing one, reload:
+#   docker compose -f ~/proxy/compose.yaml exec caddy caddy reload --config /etc/caddy/Caddyfile
+import /etc/caddy/sites/*.caddy
