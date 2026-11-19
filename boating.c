@@ -21,13 +21,23 @@ typedef struct {
 #define SEMAPHORE_INITIALIZER {0, PTHREAD_MUTEX_INITIALIZER, PTHREAD_COND_INITIALIZER}
 
 int m, n, vis_left;
+bool done = false;          // set by main once the last ride is over (under bmtx)
 semaphore boat, rider;
 pthread_mutex_t bmtx;
 pthread_barrier_t EOS;
 bool BA[MMAX];
 pthread_barrier_t BB[MMAX];
 int BC[MMAX];
-time_t BT[MMAX];
+int BT[MMAX];
+
+// Each visitor's times are drawn in main (single-threaded) and handed over,
+// because rand() is not thread-safe: on Windows each thread even gets its own
+// unseeded rand() state, so every visitor would draw identical times.
+typedef struct {
+    int id;
+    int vtime;
+    int rtime;
+} visitor_arg;
 
 int rand_range(int lo, int hi){
     return lo + rand() % (hi - lo + 1);
@@ -61,8 +71,12 @@ void *Boat(void *targ){
     pthread_mutex_unlock(&bmtx);
     while(1){
         P(&boat);
-        
+
         pthread_mutex_lock(&bmtx);
+        if(done){                   // woken by main at shutdown, not by a visitor
+            pthread_mutex_unlock(&bmtx);
+            break;
+        }
         BA[boat_id] = true;
         BC[boat_id] = -1;
         pthread_barrier_t* bar = &BB[boat_id];
@@ -73,14 +87,14 @@ void *Boat(void *targ){
         pthread_barrier_wait(bar);
         
         pthread_mutex_lock(&bmtx);
-        time_t rtime = BT[boat_id];
+        int rtime = BT[boat_id];
         BA[boat_id] = false;
         int vis_id = BC[boat_id];
         pthread_mutex_unlock(&bmtx);
 
         printf("Boat\t%d\tStart of ride for visiter %3d\n",boat_id+1,vis_id+1);
         msleep(rtime);
-        printf("Boat\t%d\tEnd of ride for visiter %3d (ride time = %3ld)\n",boat_id+1,vis_id+1,rtime);
+        printf("Boat\t%d\tEnd of ride for visiter %3d (ride time = %3d)\n",boat_id+1,vis_id+1,rtime);
 
         pthread_mutex_lock(&bmtx);
         vis_left--;
@@ -89,23 +103,23 @@ void *Boat(void *targ){
             pthread_barrier_wait(&EOS);
             break;
         }
-        pthread_mutex_unlock(&bmtx);   
+        pthread_mutex_unlock(&bmtx);
     }
-    pthread_exit(NULL);
+    return NULL;
 }
 
 void *Visitor(void *targ){
-    int vis_id = *(int *)targ;
-    free(targ);
-    time_t vtime, rtime;
-    vtime = rand_range(30, 120);
-    rtime = rand_range(15, 60);
+    visitor_arg *a = (visitor_arg *)targ;
+    int vis_id = a->id;
+    int vtime = a->vtime;
+    int rtime = a->rtime;
+    free(a);
 
-    printf("Visitor\t%d\tStarts sightseeing for %3ld minutes\n",vis_id+1,vtime);
+    printf("Visitor\t%d\tStarts sightseeing for %3d minutes\n",vis_id+1,vtime);
     msleep(vtime);
     V(&boat);
     P(&rider);
-    printf("Visitor\t%d\tReady to ride a boat (ride time = %3ld)\n",vis_id+1,rtime);
+    printf("Visitor\t%d\tReady to ride a boat (ride time = %3d)\n",vis_id+1,rtime);
 
     // Some boat must be available (one just signalled us), but it may not have
     // published BA[] yet if it was preempted. Retry, releasing bmtx and
@@ -132,7 +146,7 @@ void *Visitor(void *targ){
     msleep(rtime);
 
     printf("Visitor\t%d\tLeaving\n", vis_id+1);
-    pthread_exit(NULL);
+    return NULL;
 }
 
 int main(int argc, char* argv[]){
@@ -168,20 +182,29 @@ int main(int argc, char* argv[]){
         pthread_create(&boat_thr[i], NULL, Boat, id);
     }
     for(int i=0; i<n; i++){
-        int* id = (int*)malloc(sizeof(int));
-        *id = i;
-        pthread_create(&vis_thr[i], NULL, Visitor, id);
+        visitor_arg* a = (visitor_arg*)malloc(sizeof(visitor_arg));
+        a->id = i;
+        a->vtime = rand_range(30, 120);
+        a->rtime = rand_range(15, 60);
+        pthread_create(&vis_thr[i], NULL, Visitor, a);
     }
 
     pthread_barrier_wait(&EOS);
 
-    // The simulation is over: every visitor has ridden and left. Any boat
-    // threads still alive are parked waiting for a rider that will never come.
-    // They are not joined here on purpose -- an idle boat blocks in
-    // pthread_barrier_wait(), which is not a cancellation point, so joining
-    // them would hang forever.
-    for(int i=0; i<m; i++) pthread_cancel(boat_thr[i]);
-    for(int i=0; i<n; i++) pthread_cancel(vis_thr[i]);
+    // Every ride is over. The other boats are idle inside P(&boat), waiting for
+    // a visitor that will never come. Tell them to stop and wake each one with
+    // a token; a boat that wakes and sees `done` exits its loop. (Cancelling
+    // them instead is unsafe: a thread cancelled inside pthread_cond_wait()
+    // dies holding the mutex, and destroying primitives that other threads may
+    // still touch is a use-after-free on some pthread implementations.)
+    pthread_mutex_lock(&bmtx);
+    done = true;
+    pthread_mutex_unlock(&bmtx);
+    for(int i=0; i<m; i++) V(&boat);
+
+    // Only once every thread has finished is it safe to destroy what they use.
+    for(int i=0; i<m; i++) pthread_join(boat_thr[i], NULL);
+    for(int i=0; i<n; i++) pthread_join(vis_thr[i], NULL);
     for(int i=0; i<m; i++) pthread_barrier_destroy(&BB[i]);
     pthread_mutex_destroy(&bmtx);
     pthread_mutex_destroy(&(boat.mtx));
