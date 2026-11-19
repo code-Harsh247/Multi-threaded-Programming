@@ -1,27 +1,75 @@
-# Footanical Barden — Boating Simulation
+# Boating Simulator
 
-A multithreaded simulation of `m` boats and `n` visitors sharing a
-lake. Each visitor sightsees for a random time, then queues for a boat
-ride of a random duration; any free boat takes any waiting visitor,
-one at a time. Synchronization is built entirely from pthreads
-primitives: mutexes, barriers, and a counting semaphore implemented
-from scratch on top of a condition variable.
+A resource scheduler in C that dynamically allocates a pool of shared
+resources (boats) among many concurrent client threads (visitors).
 
-Started as CS39002 Operating Systems Lab Assignment 7 (`LA7.pdf`).
-This version is the engine for a web simulator: it takes settings as
-flags and prints a stream of JSON events. The original
-assignment-format version is commit `6ec87f0`.
+**Live demo: [boats.129-225-109-238.sslip.io](https://boats.129-225-109-238.sslip.io)**:
+pick the number of boats and visitors, open the park, and watch every
+thread's events animated live in pixel art.
 
-## Requirements
+## How it works
 
-- `gcc` and `make`
-- A pthreads implementation (glibc on Linux, or MinGW-w64 on Windows)
-- Python 3, only for `make check`
+```
+Browser ──POST /api/run──▶ Node.js server ──spawns──▶ boating (C, pthreads)
+   ▲                            │                     m boat threads
+   └──── NDJSON event stream ◀──┘◀── JSON events ───  n visitor threads
+```
 
-## Build and run
+- **The engine (`boating.c`)** runs one POSIX thread per boat (5–20) and
+  per visitor (20–200). A visitor sightsees, waits for a boat, rides,
+  and leaves. Any free boat takes any waiting visitor, decided at
+  runtime. Every state change is printed as a JSON event.
+- **The server (`web/`)** runs the engine once per request and streams
+  its events straight to the browser. Guard rails cap run length and
+  the number of runs per visitor and server-wide.
+- **The frontend (`web/public/`)** turns the stream into a pixel-art
+  lake, jetty and park, with live stats, a queue chart and hover info.
+  All the art is drawn in code.
+
+## Highlights
+
+- **A counting semaphore built from scratch** on a mutex and a
+  condition variable, with no OS semaphores. It is correct under
+  spurious wakeups and with condition queues that aren't FIFO.
+- **A race-free boat/visitor handshake.** Semaphores count who is
+  ready, one mutex makes "scan and claim a boat" atomic, and a
+  per-boat barrier makes the boat start only after its visitor's
+  ride time is written.
+- **A clean shutdown.** The last boat meets `main` on a barrier, then
+  idle boats are woken to exit on their own, every thread is joined,
+  and only then are the primitives destroyed.
+- **Tested:** 40 automated tests (server, API, engine/server limit
+  parity, and the frontend state model replaying real runs), plus
+  stress batches of 65 runs across the full range with 0 failures.
+
+## Repository layout
+
+| Path | What it is |
+|---|---|
+| `boating.c`, `Makefile` | the C simulation engine |
+| `tests/check_events.py` | validates an engine run's event stream |
+| `web/src/` | Express server: limits, process runner, routes |
+| `web/public/` | the pixel-art frontend (plain ES modules, no build step) |
+| `web/test/` | `node --test` suites |
+| `Dockerfile`, `deploy/` | container image and VM deployment (Caddy + Docker Compose) |
+
+## Run it locally
+
+Needs `gcc`, `make`, a pthreads implementation (glibc on Linux or
+MinGW-w64 on Windows), Node.js 22+, and Python 3 for `make check`.
 
 ```bash
-make
+make                        # build the engine
+cd web && npm install
+npm start                   # http://localhost:3000
+npm test
+```
+
+Or with Docker: `docker build -t boating-web . && docker run -p 3000:3000 boating-web`.
+
+## The engine
+
+```bash
 ./boating --boats 8 --visitors 50 --ms-per-min 20
 ```
 
@@ -34,13 +82,11 @@ make
 | `--ride-min N`, `--ride-max N` | ride time range (minutes) | 15, 60 | 1–120 |
 
 Via make: `make run M=8 N=50 SPEED=20`. `make check` does a fast run
-and validates its output with `tests/check_events.py`.
+and validates it with `tests/check_events.py`.
 
-## Output
-
-One JSON object per line on stdout, flushed immediately and in
-non-decreasing time order. `t` is real milliseconds since start; ids
-start at 1.
+It prints one JSON object per line on stdout, flushed immediately and
+in non-decreasing time order. `t` is real milliseconds since start;
+ids start at 1.
 
 ```
 {"type":"config","t":0,"boats":8,"visitors":50,"ms_per_min":20,"sight":[30,120],"ride":[15,60]}
@@ -66,55 +112,25 @@ start at 1.
 | `done` | every ride is finished and every thread has exited (always last) |
 | `error` | bad arguments (exit code 2) or a thread could not start (exit code 1) |
 
-## Web server
-
-`web/` is a Node.js (22+) + Express server that runs the engine once
-per request and streams its events to the browser.
-
-```bash
-make                       # build the engine first
-cd web && npm install
-npm start                  # http://localhost:3000
-npm test
-```
-
-`http://localhost:3000` is the simulator: a pixel-art lake, jetty and
-park strip where the event stream is animated live.
-- **Visitors:** they wander the park while sightseeing, queue in a
-  switchback pen, walk to the boat they claimed, row a loop timed to
-  their ride, and walk home.
-- **Around the scene:** settings, a stats panel with a park clock, a
-  queue-length chart, a ride counter at every berth, and hover info for
-  any visitor or boat.
-- **Art:** all of it is drawn in code from palette grids
-  (`public/js/sprites.js`); there are no image files.
-- **Raw events:** `/debug.html` shows the stream unanimated.
-
-Frontend code (plain ES modules in `web/public/js`, no build step):
-
-| File | Role |
-|---|---|
-| `sim.js` | state model built from the events (counts, queue order, waits); tested in Node |
-| `scene.js` | the animated canvas: background, people, boats, hit-testing |
-| `sprites.js`, `font.js` | pixel art and a 3×5 digit font |
-| `chart.js` | queue-length chart |
-| `main.js` | settings form, streaming, stats, tooltips |
-| `/js/limits.js` | served from `src/limits.js`, so the browser validates with the server's own rules |
+## The web server
 
 | Route | Purpose |
 |---|---|
 | `GET /api/limits` | allowed range and default for every setting, plus `maxRunSeconds` |
 | `POST /api/run` | JSON body `{boats, visitors, msPerMin, sightMin, sightMax, rideMin, rideMax}` (all optional); responds with the engine's events as an NDJSON stream |
 | `GET /healthz` | `ok` |
+| `/debug.html` | the raw event stream, unanimated |
 
+- The engine is started with an argument list, never a shell, and is
+  killed when the client aborts, the run times out, or the server stops.
 - Read the stream with `fetch` and stop a run with an
   `AbortController`. EventSource would reconnect when the stream ends
   and start a new run.
 - Bad settings get `400`. So does a run whose worst-case time exceeds
-  the limit, with the estimate included.
-- Too many runs get `429` (per visitor) or `503` (server-wide). A run
-  that overruns is killed, and the stream ends with a
-  `{"type":"error","message":"run timed out"}` line.
+  the limit, with the estimate included. Too many runs get `429` (per
+  visitor) or `503` (server-wide).
+- The browser imports the server's own `src/limits.js`, so validation
+  and the run-time estimate exist in one place.
 
 Configuration (environment variables):
 
@@ -128,27 +144,15 @@ Configuration (environment variables):
 | `MAX_RUN_SECONDS` | 180 | longest allowed worst-case run |
 | `TRUST_PROXY` | off | set to `1` behind a hosting proxy so visitor IPs are correct |
 
-`docker build -t boating-web . && docker run -p 3000:3000 boating-web`
-builds the engine on Linux and runs the server as a non-root user.
-To host it on a VM behind HTTPS (alongside other projects), see
-[`deploy/README.md`](deploy/README.md).
+## Deployment
 
-## Design notes
+The live demo runs on an Oracle Cloud Ampere VM: Docker Compose behind
+a shared Caddy proxy that handles HTTPS, set up so the same VM can host
+other projects. [`deploy/README.md`](deploy/README.md) covers the
+first deploy, updates, and adding another project.
 
-- `semaphore` is a `{ value, mutex, condvar }` struct. `P()` waits
-  `while value <= 0`, then decrements; `V()` increments and signals.
-  The `while` re-check makes it safe under spurious wakeups and
-  without assuming the condition queue is FIFO.
-- A boat first takes a token from the `boat` semaphore, then
-  publishes itself in shared arrays (`BA`/`BC`/`BT`, guarded by one
-  mutex), signals `rider`, and meets the visitor that claims it on a
-  per-boat `pthread_barrier_t`. This lets any free boat pair with any
-  waiting visitor without fixing the pairing in advance.
-- Visitors' random times are drawn in `main`, because `rand()` is not
-  thread-safe.
-- Main waits on an end-of-simulation barrier with the boat that
-  finishes the last ride, then sets a `done` flag, wakes each idle
-  boat so it exits on its own, joins every thread, and only then
-  destroys the synchronization objects.
-- All output goes through one `emit()` helper under its own lock,
-  which stamps the time, writes the whole line and flushes it.
+## Background
+
+This started as Lab Assignment 7 of CS39002 (Operating Systems
+Laboratory), `LA7.pdf`. The original assignment-format version, which
+prints plain text, is commit `6ec87f0`.
