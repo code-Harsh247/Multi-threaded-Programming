@@ -1,82 +1,87 @@
 # Footanical Barden — Boating Simulation
 
-CS39002 Operating Systems Laboratory — Lab Assignment 7 (`LA7.pdf`).
-
 A multithreaded simulation of `m` boats and `n` visitors sharing a
-lake at Footanical Barden. Each visitor sightsees for a random time,
-then queues for a boat ride of a random duration; each boat serves
-visitors one after another for the whole day. Synchronization is
-built entirely from pthreads primitives: mutexes, barriers, and a
-counting semaphore implemented from scratch on top of a condition
-variable (no System V or POSIX semaphores, per the assignment spec).
+lake. Each visitor sightsees for a random time, then queues for a boat
+ride of a random duration; any free boat takes any waiting visitor,
+one at a time. Synchronization is built entirely from pthreads
+primitives: mutexes, barriers, and a counting semaphore implemented
+from scratch on top of a condition variable.
+
+Started as CS39002 Operating Systems Lab Assignment 7 (`LA7.pdf`).
+This version is the engine for a web simulator: it takes settings as
+flags and prints a stream of JSON events. The original
+assignment-format version is commit `6ec87f0`.
 
 ## Requirements
 
-- A C compiler (`gcc`) and `make`
-- A pthreads implementation (glibc on Linux/WSL, or MinGW-w64 on
-  Windows)
+- `gcc` and `make`
+- A pthreads implementation (glibc on Linux, or MinGW-w64 on Windows)
+- Python 3, only for `make check`
 
-## Build
+## Build and run
 
 ```bash
 make
+./boating --boats 8 --visitors 50 --ms-per-min 20
 ```
 
-Produces the `boating` executable.
+| Flag | Meaning | Default | Allowed |
+|---|---|---|---|
+| `--boats N` | number of boats | 5 | 5–20 |
+| `--visitors N` | number of visitors | 20 | 20–200 |
+| `--ms-per-min N` | real milliseconds per simulated minute | 100 | 1–200 |
+| `--sight-min N`, `--sight-max N` | sightseeing time range (minutes) | 30, 120 | 1–240 |
+| `--ride-min N`, `--ride-max N` | ride time range (minutes) | 15, 60 | 1–120 |
 
-## Run
+Via make: `make run M=8 N=50 SPEED=20`. `make check` does a fast run
+and validates its output with `tests/check_events.py`.
 
-```bash
-./boating <m> <n>
+## Output
+
+One JSON object per line on stdout, flushed immediately and in
+non-decreasing time order. `t` is real milliseconds since start; ids
+start at 1.
+
+```
+{"type":"config","t":0,"boats":8,"visitors":50,"ms_per_min":20,"sight":[30,120],"ride":[15,60]}
+{"type":"boat_ready","t":0,"boat":3}
+{"type":"visitor_arrive","t":0,"visitor":7,"sight":71,"ride":36}
+{"type":"visitor_wait","t":1420,"visitor":7}
+{"type":"claim","t":1421,"visitor":7,"boat":3}
+{"type":"ride_start","t":1421,"boat":3,"visitor":7,"ride":36}
+{"type":"ride_end","t":2141,"boat":3,"visitor":7}
+{"type":"visitor_leave","t":2141,"visitor":7}
+{"type":"done","t":9876,"rides":50}
 ```
 
-- `m` — number of boats, `5 <= m <= 10`
-- `n` — number of visitors, `20 <= n <= 100`
-
-Or via make, with sensible defaults (`m=5 n=20`):
-
-```bash
-make run
-make run M=8 N=50
-```
-
-## Clean
-
-```bash
-make clean
-```
+| Event | Meaning |
+|---|---|
+| `config` | the settings in use (always first) |
+| `boat_ready` | a boat thread has started |
+| `visitor_arrive` | a visitor starts sightseeing; carries its `sight` and `ride` times |
+| `visitor_wait` | sightseeing is over; the visitor is waiting at the jetty |
+| `claim` | the visitor has claimed a free boat |
+| `ride_start` / `ride_end` | the boat's ride with that visitor |
+| `visitor_leave` | the visitor has left (can come just before or after `ride_end`) |
+| `done` | every ride is finished and every thread has exited (always last) |
+| `error` | bad arguments (exit code 2) or a thread could not start (exit code 1) |
 
 ## Design notes
 
-- `semaphore` is a `{ value, mutex, condvar }` struct; `P()`/`V()`
-  implement the standard negative-value counting-semaphore algorithm
-  (Dragon Book §6.2.2) on top of a condition variable, guarding
-  against spurious wakeups with a `while` re-check.
-- Each boat publishes its availability through shared arrays
-  (`BA`/`BC`/`BT`) protected by a single mutex, then rendezvous with
-  the visitor that claims it via a per-boat `pthread_barrier_t`. This
-  lets any free boat pair with any waiting visitor without fixing the
-  pairing in advance.
-- A boat only publishes its availability *after* it has actually
-  acquired a rendezvous token, which is what keeps the handshake
-  race-free under heavy contention (verified under `m=5, n=100` and
-  other high-load combinations across repeated runs).
-- Main waits on an `EOS` (end-of-simulation) barrier that the last
-  boat to finish a ride also reaches, then cancels and joins any
-  remaining idle boat threads before tearing down synchronization
-  objects.
-
-## Sample output
-
-```
-Boat    1    Ready
-Boat    2    Ready
-Visitor 1    Starts sightseeing for  58 minutes
-Visitor 1    Ready to ride a boat (ride time =  22)
-Visitor 1    Finds boat  2
-Boat    2    Start of ride for visiter   1
-Boat    2    End of ride for visiter   1 (ride time =  22)
-Visitor 1    Leaving
-...
---- All visitors have left ---
-```
+- `semaphore` is a `{ value, mutex, condvar }` struct. `P()` waits
+  `while value <= 0`, then decrements; `V()` increments and signals.
+  The `while` re-check makes it safe under spurious wakeups and
+  without assuming the condition queue is FIFO.
+- A boat first takes a token from the `boat` semaphore, then
+  publishes itself in shared arrays (`BA`/`BC`/`BT`, guarded by one
+  mutex), signals `rider`, and meets the visitor that claims it on a
+  per-boat `pthread_barrier_t`. This lets any free boat pair with any
+  waiting visitor without fixing the pairing in advance.
+- Visitors' random times are drawn in `main`, because `rand()` is not
+  thread-safe.
+- Main waits on an end-of-simulation barrier with the boat that
+  finishes the last ride, then sets a `done` flag, wakes each idle
+  boat so it exits on its own, joins every thread, and only then
+  destroys the synchronization objects.
+- All output goes through one `emit()` helper under its own lock,
+  which stamps the time, writes the whole line and flushes it.
