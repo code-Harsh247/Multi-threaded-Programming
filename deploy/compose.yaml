@@ -11,7 +11,7 @@ services:
       MAX_CONCURRENT_RUNS: "4"
       MAX_RUNS_PER_IP: "1"
       RUNS_PER_MINUTE_PER_IP: "20"
-      MAX_RUN_SECONDS: "180"
+      MAX_RUN_SECONDS: "1050"     # fits the worst case: 5 boats, 200 visitors, slowest speed, longest times (~1032 s)
     expose:
       - "3000"
     mem_limit: 512m
