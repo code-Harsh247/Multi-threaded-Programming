@@ -1,0 +1,7 @@
+{$SITE_ADDRESS} {
+	reverse_proxy app:3000 {
+		# Pass each simulation event to the browser the moment it arrives.
+		# Without this, Caddy may buffer the NDJSON stream.
+		flush_interval -1
+	}
+}

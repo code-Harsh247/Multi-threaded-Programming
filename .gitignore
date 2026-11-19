@@ -2,3 +2,4 @@
 web/node_modules/
 /boating
 /boating.exe
+deploy/.env
