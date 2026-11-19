@@ -66,6 +66,71 @@ start at 1.
 | `done` | every ride is finished and every thread has exited (always last) |
 | `error` | bad arguments (exit code 2) or a thread could not start (exit code 1) |
 
+## Web server
+
+`web/` is a Node.js (22+) + Express server that runs the engine once
+per request and streams its events to the browser.
+
+```bash
+make                       # build the engine first
+cd web && npm install
+npm start                  # http://localhost:3000
+npm test
+```
+
+`http://localhost:3000` is the simulator: a pixel-art lake, jetty and
+park strip where the event stream is animated live.
+- **Visitors:** they wander the park while sightseeing, queue in a
+  switchback pen, walk to the boat they claimed, row a loop timed to
+  their ride, and walk home.
+- **Around the scene:** settings, a stats panel with a park clock, a
+  queue-length chart, a ride counter at every berth, and hover info for
+  any visitor or boat.
+- **Art:** all of it is drawn in code from palette grids
+  (`public/js/sprites.js`); there are no image files.
+- **Raw events:** `/debug.html` shows the stream unanimated.
+
+Frontend code (plain ES modules in `web/public/js`, no build step):
+
+| File | Role |
+|---|---|
+| `sim.js` | state model built from the events (counts, queue order, waits); tested in Node |
+| `scene.js` | the animated canvas: background, people, boats, hit-testing |
+| `sprites.js`, `font.js` | pixel art and a 3×5 digit font |
+| `chart.js` | queue-length chart |
+| `main.js` | settings form, streaming, stats, tooltips |
+| `/js/limits.js` | served from `src/limits.js`, so the browser validates with the server's own rules |
+
+| Route | Purpose |
+|---|---|
+| `GET /api/limits` | allowed range and default for every setting, plus `maxRunSeconds` |
+| `POST /api/run` | JSON body `{boats, visitors, msPerMin, sightMin, sightMax, rideMin, rideMax}` (all optional); responds with the engine's events as an NDJSON stream |
+| `GET /healthz` | `ok` |
+
+- Read the stream with `fetch` and stop a run with an
+  `AbortController`. EventSource would reconnect when the stream ends
+  and start a new run.
+- Bad settings get `400`. So does a run whose worst-case time exceeds
+  the limit, with the estimate included.
+- Too many runs get `429` (per visitor) or `503` (server-wide). A run
+  that overruns is killed, and the stream ends with a
+  `{"type":"error","message":"run timed out"}` line.
+
+Configuration (environment variables):
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `PORT` | 3000 | port to listen on |
+| `BOATING_BIN` | `../boating` | path to the engine |
+| `MAX_CONCURRENT_RUNS` | 4 | simulations at once, server-wide |
+| `MAX_RUNS_PER_IP` | 1 | simulations at once, per visitor |
+| `RUNS_PER_MINUTE_PER_IP` | 20 | simulations started per minute, per visitor |
+| `MAX_RUN_SECONDS` | 180 | longest allowed worst-case run |
+| `TRUST_PROXY` | off | set to `1` behind a hosting proxy so visitor IPs are correct |
+
+`docker build -t boating-web . && docker run -p 3000:3000 boating-web`
+builds the engine on Linux and runs the server as a non-root user.
+
 ## Design notes
 
 - `semaphore` is a `{ value, mutex, condvar }` struct. `P()` waits

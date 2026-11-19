@@ -1,0 +1,8 @@
+.git
+.claude
+**/node_modules
+web/test
+tests
+*.pdf
+boating
+boating.exe

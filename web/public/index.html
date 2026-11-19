@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Footanical Barden — Boating Simulator</title>
+<meta name="description" content="A pixel-art boating simulator driven by a multithreaded C program: every boat and visitor is a POSIX thread.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Pixelify+Sans:wght@400;600;700&display=swap">
+<!-- Digits only: Pixelify Sans's 2 and 5 look like a mirrored S and an S. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Silkscreen:wght@400;700&text=0123456789&display=swap">
+<link rel="stylesheet" href="/css/style.css">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' shape-rendering='crispEdges'%3E%3Crect width='16' height='16' fill='%233b8bd6'/%3E%3Crect x='2' y='9' width='12' height='2' fill='%23fff4da'/%3E%3Crect x='2' y='11' width='12' height='2' fill='%23e74c3c'/%3E%3Crect x='4' y='13' width='8' height='1' fill='%23a93226'/%3E%3Crect x='7' y='5' width='3' height='2' fill='%235a3a22'/%3E%3Crect x='7' y='7' width='3' height='2' fill='%23ffb703'/%3E%3C/svg%3E">
+</head>
+<body>
+<header class="topbar">
+  <h1>Footanical Barden</h1>
+  <p>A day at the boating lake. Every boat and every visitor is a real thread in a C program; you're watching their events live.</p>
+</header>
+
+<div class="layout">
+  <aside class="panel settings" aria-label="Park settings">
+    <h2>Park settings</h2>
+    <form id="settings" autocomplete="off">
+      <label class="field">
+        <span class="field-label">Boats <output id="boats-out">5</output></span>
+        <input type="range" name="boats" id="boats">
+      </label>
+      <label class="field">
+        <span class="field-label">Visitors <output id="visitors-out">20</output></span>
+        <input type="range" name="visitors" id="visitors">
+      </label>
+      <label class="field">
+        <span class="field-label">Speed</span>
+        <select name="msPerMin" id="msPerMin"></select>
+      </label>
+      <fieldset class="pair">
+        <legend>Sightseeing time (min)</legend>
+        <label>from <input type="number" name="sightMin" id="sightMin"></label>
+        <label>to <input type="number" name="sightMax" id="sightMax"></label>
+      </fieldset>
+      <fieldset class="pair">
+        <legend>Boat ride time (min)</legend>
+        <label>from <input type="number" name="rideMin" id="rideMin"></label>
+        <label>to <input type="number" name="rideMax" id="rideMax"></label>
+      </fieldset>
+    </form>
+    <p class="estimate" id="estimate" aria-live="polite"></p>
+    <div class="buttons">
+      <button type="button" id="start" class="btn go">Open the park</button>
+      <button type="button" id="stop" class="btn stop" disabled>Stop</button>
+    </div>
+  </aside>
+
+  <section class="stage">
+    <div class="panel scene-panel">
+      <div class="scene-wrap" id="scene-wrap">
+        <canvas id="scene" aria-label="Animated view of the lake, jetty and park"></canvas>
+        <div class="tooltip" id="tooltip" role="tooltip" hidden></div>
+      </div>
+      <p class="message" id="message" aria-live="polite">Pick your settings and open the park.</p>
+    </div>
+
+    <div class="below">
+      <div class="panel stats" aria-label="Live stats">
+        <div class="stats-head">
+          <h2>Live stats</h2>
+          <div class="clock" id="clock" title="Simulated time (the park opens at 9:00 AM)">9:00 AM</div>
+        </div>
+        <dl class="stat-grid">
+          <div><dt>Sightseeing</dt><dd id="st-sight">0</dd></div>
+          <div><dt>Waiting</dt><dd id="st-wait">0</dd></div>
+          <div><dt>On the lake</dt><dd id="st-ride">0</dd></div>
+          <div><dt>Gone home</dt><dd id="st-left">0</dd></div>
+          <div><dt>Average wait</dt><dd id="st-avg">–</dd></div>
+          <div><dt>Longest wait</dt><dd id="st-max">–</dd></div>
+          <div><dt>Boats in use</dt><dd id="st-busy">0 / 5</dd></div>
+          <div><dt>Real time</dt><dd id="st-real">0.0 s</dd></div>
+        </dl>
+        <div class="progress" aria-hidden="true"><div class="progress-bar" id="progress"></div></div>
+      </div>
+
+      <div class="panel chart-panel">
+        <h2>People waiting at the jetty</h2>
+        <div class="chart-wrap">
+          <span class="chart-y" id="chart-y">5</span>
+          <canvas id="chart" aria-label="Queue length over simulated time"></canvas>
+        </div>
+        <div class="chart-x"><span>9:00 AM</span><span id="chart-x-end">10:00 AM</span></div>
+        <p class="chart-note" id="chart-note">Peak: 0 waiting</p>
+      </div>
+    </div>
+  </section>
+</div>
+
+<footer class="foot">
+  Boats and visitors sync with a home-made counting semaphore, a mutex and per-boat barriers.
+  <a href="/debug.html">See the raw event stream</a>.
+</footer>
+
+<script type="module" src="/js/main.js"></script>
+</body>
+</html>

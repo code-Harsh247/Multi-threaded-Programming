@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Boating Simulator — Raw Event Stream</title>
+<style>
+  :root { --bg: #ffffff; --fg: #0f172a; --muted: #64748b; --line: #cbd5e1; --panel: #f8fafc; --accent: #2563eb; --bad: #dc2626; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg: #0b1120; --fg: #e2e8f0; --muted: #94a3b8; --line: #334155; --panel: #111827; --accent: #60a5fa; --bad: #f87171; }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; padding: 16px; font: 15px/1.45 system-ui, sans-serif; background: var(--bg); color: var(--fg); }
+  main { max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { margin: 0 0 16px; color: var(--muted); }
+  form { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; margin-bottom: 12px; }
+  label { display: flex; flex-direction: column; font-size: 13px; color: var(--muted); }
+  input { margin-top: 3px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--fg); font: inherit; }
+  .buttons { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+  button { padding: 8px 16px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--fg); font: inherit; cursor: pointer; }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 8px; margin-bottom: 12px; }
+  .stat { border: 1px solid var(--line); border-radius: 6px; padding: 8px 10px; background: var(--panel); }
+  .stat b { display: block; font-size: 20px; }
+  .stat span { font-size: 12px; color: var(--muted); }
+  #status { min-height: 1.4em; margin-bottom: 8px; }
+  #status.bad { color: var(--bad); }
+  pre { margin: 0; height: 360px; overflow: auto; padding: 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); font: 12px/1.4 ui-monospace, Consolas, monospace; white-space: pre-wrap; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Boating Simulator — raw event stream</h1>
+  <p class="note">Debug view: the raw events from the engine. <a href="/">Back to the park</a>.</p>
+
+  <form id="settings"></form>
+  <div class="buttons">
+    <button id="start" class="primary" type="button">Start</button>
+    <button id="stop" type="button" disabled>Stop</button>
+  </div>
+  <div id="status"></div>
+  <div class="stats">
+    <div class="stat"><b id="s-waiting">0</b><span>waiting at jetty</span></div>
+    <div class="stat"><b id="s-riding">0</b><span>on a boat</span></div>
+    <div class="stat"><b id="s-left">0</b><span>left</span></div>
+    <div class="stat"><b id="s-time">0.0 s</b><span>elapsed</span></div>
+  </div>
+  <pre id="log"></pre>
+</main>
+<script>
+  const form = document.getElementById('settings');
+  const startBtn = document.getElementById('start');
+  const stopBtn = document.getElementById('stop');
+  const statusEl = document.getElementById('status');
+  const logEl = document.getElementById('log');
+  const stat = (id, v) => { document.getElementById(id).textContent = v; };
+  let controller = null;
+
+  const setStatus = (text, bad = false) => { statusEl.textContent = text; statusEl.className = bad ? 'bad' : ''; };
+
+  async function loadLimits() {
+    const res = await fetch('/api/limits');
+    const { settings, maxRunSeconds } = await res.json();
+    for (const [key, lim] of Object.entries(settings)) {
+      const label = document.createElement('label');
+      label.textContent = `${key} (${lim.min}–${lim.max})`;
+      const input = document.createElement('input');
+      Object.assign(input, { type: 'number', name: key, min: lim.min, max: lim.max, value: lim.default, step: 1 });
+      label.appendChild(input);
+      form.appendChild(label);
+    }
+    form.elements.msPerMin.value = 20;   // faster than the engine default, for a quick demo
+    setStatus(`Runs are limited to ${maxRunSeconds} s of worst-case time.`);
+  }
+
+  async function start() {
+    const body = {};
+    for (const input of form.elements) body[input.name] = Number(input.value);
+    logEl.textContent = '';
+    ['s-waiting', 's-riding', 's-left'].forEach((id) => stat(id, 0));
+    stat('s-time', '0.0 s');
+    let waiting = 0, riding = 0, left = 0, lines = [];
+
+    controller = new AbortController();
+    startBtn.disabled = true; stopBtn.disabled = false;
+    setStatus('Starting…');
+    try {
+      const res = await fetch('/api/run', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+        signal: controller.signal,
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        setStatus(`${res.status}: ${err.error ?? res.statusText}`, true);
+        return;
+      }
+      setStatus('Running…');
+      const reader = res.body.pipeThrough(new TextDecoderStream()).getReader();
+      let buffer = '';
+      for (;;) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += value;
+        let nl;
+        while ((nl = buffer.indexOf('\n')) >= 0) {
+          const line = buffer.slice(0, nl);
+          buffer = buffer.slice(nl + 1);
+          if (!line) continue;
+          const ev = JSON.parse(line);
+          if (ev.type === 'visitor_wait') waiting++;
+          if (ev.type === 'ride_start') { waiting--; riding++; }
+          if (ev.type === 'ride_end') riding--;
+          if (ev.type === 'visitor_leave') left++;
+          if (ev.type === 'error') setStatus(`Error: ${ev.message}`, true);
+          if (ev.type === 'done') setStatus(`Done: ${ev.rides} rides in ${(ev.t / 1000).toFixed(1)} s.`);
+          stat('s-waiting', waiting); stat('s-riding', riding); stat('s-left', left);
+          stat('s-time', `${(ev.t / 1000).toFixed(1)} s`);
+          lines.push(line);
+          if (lines.length > 300) lines = lines.slice(-300);
+          logEl.textContent = lines.join('\n');
+          logEl.scrollTop = logEl.scrollHeight;
+        }
+      }
+    } catch (e) {
+      if (e.name === 'AbortError') setStatus('Stopped.');
+      else setStatus(`Connection error: ${e.message}`, true);
+    } finally {
+      controller = null;
+      startBtn.disabled = false; stopBtn.disabled = true;
+    }
+  }
+
+  startBtn.addEventListener('click', start);
+  stopBtn.addEventListener('click', () => controller?.abort());
+  loadLimits().catch((e) => setStatus(`Could not load limits: ${e.message}`, true));
+</script>
+</body>
+</html>
