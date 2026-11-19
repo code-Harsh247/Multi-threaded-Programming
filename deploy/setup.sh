@@ -18,6 +18,18 @@ REPO="https://github.com/code-Harsh247/Multi-threaded-Programming.git"
 APP_DIR="$HOME/apps/boating"
 PROXY_DIR="$HOME/proxy"
 
+echo "== 0. Swap (small VMs, e.g. Oracle's 1 GB micro shape)"
+mem_kb=$(awk '/MemTotal/ {print $2}' /proc/meminfo)
+if [ "$mem_kb" -lt 3000000 ] && ! swapon --show | grep -q .; then
+  # Docker image builds can exceed 1 GB of RAM; disk-backed swap prevents OOM kills.
+  sudo fallocate -l 2G /swapfile
+  sudo chmod 600 /swapfile
+  sudo mkswap /swapfile
+  sudo swapon /swapfile
+  grep -q '^/swapfile ' /etc/fstab || echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab >/dev/null
+fi
+free -h
+
 echo "== 1. Docker"
 if ! command -v docker >/dev/null || ! sudo docker compose version >/dev/null 2>&1; then
   sudo apt-get update -y
