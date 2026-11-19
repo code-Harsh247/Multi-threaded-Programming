@@ -6,7 +6,7 @@ import { validate, estimateSeconds } from './limits.js';   // served from the se
 
 const $ = (id) => document.getElementById(id);
 const SPEEDS = [
-  { ms: 200, label: 'Slow motion — 1 min = 200 ms' },
+  { ms: 200, label: 'Slow — 1 min = 200 ms' },
   { ms: 150, label: 'Leisurely — 1 min = 150 ms' },
   { ms: 100, label: 'Relaxed — 1 min = 100 ms' },
   { ms: 50, label: 'Normal — 1 min = 50 ms' },
