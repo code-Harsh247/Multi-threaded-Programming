@@ -37,13 +37,15 @@
       </label>
       <fieldset class="pair">
         <legend>Sightseeing time (min)</legend>
-        <label>from <input type="number" name="sightMin" id="sightMin"></label>
-        <label>to <input type="number" name="sightMax" id="sightMax"></label>
+        <input type="number" name="sightMin" id="sightMin" aria-label="Shortest sightseeing time, minutes">
+        <span aria-hidden="true">to</span>
+        <input type="number" name="sightMax" id="sightMax" aria-label="Longest sightseeing time, minutes">
       </fieldset>
       <fieldset class="pair">
         <legend>Boat ride time (min)</legend>
-        <label>from <input type="number" name="rideMin" id="rideMin"></label>
-        <label>to <input type="number" name="rideMax" id="rideMax"></label>
+        <input type="number" name="rideMin" id="rideMin" aria-label="Shortest boat ride, minutes">
+        <span aria-hidden="true">to</span>
+        <input type="number" name="rideMax" id="rideMax" aria-label="Longest boat ride, minutes">
       </fieldset>
     </form>
     <p class="estimate" id="estimate" aria-live="polite"></p>
